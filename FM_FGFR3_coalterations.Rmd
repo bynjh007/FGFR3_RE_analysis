@@ -1,0 +1,403 @@
+---
+title: "Co-alterations with FGFR3"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = F, warning = F)
+```
+
+# loading data
+```{r}
+load("~/Dropbox/Work_Netherlands/FGFR3/R/FM_FGFR3_coalterations.RData")
+```
+# libraries
+```{r}
+library(ComplexHeatmap)
+library(circlize)
+library(RColorBrewer)
+library(dplyr)
+library(ggplot2)
+library(patchwork)
+```
+# Heatmap annotation
+```{r}
+# selecting only C-terminal truncating alterations
+onco_data_trunc = onco_data %>% filter((FGFR3_RE_loc == "upstream" & !grepl(";", gene2_RE)) | (grepl("Mut", onco_data$Type)))
+df_oncoplot = onco_data_trunc
+
+# FGFR3 mutation
+FGFR3_mut = rep(NA, nrow(df_oncoplot))
+FGFR3_mut[df_oncoplot$Type == "Mut_trunc"] = "E18-trunc"
+FGFR3_mut[df_oncoplot$Type == "Mut_splice site"] = "E18-splice"
+
+# FGFR3 rearrangement
+FGFR3_re_loc = rep(NA, nrow(df_oncoplot))
+FGFR3_re_loc[grepl("chr4", df_oncoplot$pos1_RE) & grepl("chr4", df_oncoplot$pos2_RE)] = "Chr4"
+FGFR3_re_loc[grepl("chr4", df_oncoplot$pos1_RE) & !grepl("chr4", df_oncoplot$pos2_RE)] = "Other"
+FGFR3_re_loc[!grepl("chr4", df_oncoplot$pos1_RE) & grepl("chr4", df_oncoplot$pos2_RE)] = "Other"
+
+# FGFR3 RE type (conservative inframe: both up and downstream of bp is inframe)
+FGFR3_RE_in_strand_1 = onco_data_trunc %>% filter(grepl("Fusion", Type)) %>%
+  mutate(effect = ifelse(grepl("inframe", breakpoint_5p_by_Jessica_annot) & grepl("inframe", breakpoint_3p_by_Jessica_annot),
+                         "inframe", "in-strand (frame-unknown)"))
+# FGFR3 RE type (relaxed inframe: if downstream exon of 3'-BP is inframe because E17 (inframe) is used although BP is in Exon 18
+FGFR3_RE_in_strand_2 = onco_data_trunc %>% filter(grepl("Fusion", Type)) %>%
+  mutate(effect = ifelse(grepl("inframe", breakpoint_5p_by_Jessica_annot) & grepl("inframe", breakpoint_3p_by_Jessica_annot),
+                         "inframe", "in-strand (frame-unknown)")) %>%
+  mutate(effect = replace(effect, grepl("intron", breakpoint_3p_by_Jessica) & grepl("inframe", breakpoint_3p_by_Jessica_annot) & grepl("FGFR3", breakpoint_5p_by_Jessica), "inframe"))
+
+df_oncoplot = df_oncoplot %>% 
+    mutate(RE.type = rep(NA, nrow(df_oncoplot)),
+           RE.type = replace(RE.type, grepl("Fusion", Type), FGFR3_RE_in_strand_1$effect),
+           RE.type = replace(RE.type, grepl("Out-of-strand RE", Type), "out-of-strand RE"),
+           RE.type = replace(RE.type, grepl("RE with intergenic space", Type), "intergenic RE"),
+           RE.type = replace(RE.type, grepl("Internal RE", Type), "re_internal")) %>%
+    mutate(RE.type_2 = rep(NA, nrow(df_oncoplot)),
+           RE.type_2 = replace(RE.type_2, grepl("Fusion", Type), FGFR3_RE_in_strand_2$effect),
+           RE.type_2 = replace(RE.type_2, grepl("Out-of-strand RE", Type), "out-of-strand RE"),
+           RE.type_2 = replace(RE.type_2, grepl("RE with intergenic space", Type), "intergenic RE"),
+           RE.type_2 = replace(RE.type_2, grepl("Internal RE", Type), "re_internal")) %>%
+    mutate(FGFR3.E1.E17.amp = ifelse(FGFR3.E1.E17.amp == "X", "Yes", NA))
+
+
+df_oncoplot = data.frame(Order = 1:nrow(df_oncoplot),
+                         TCGA_type = df_oncoplot$TCGA,
+                         FGFR3_E1_E17_amp = df_oncoplot$FGFR3.E1.E17.amp,
+                         FGFR3_mut = FGFR3_mut,
+                         RE_FGFR3 = df_oncoplot$RE.type,
+                         RE_FGFR3_re = df_oncoplot$RE.type_2,
+                         FGFR3_brkpt = df_oncoplot$FGFR3_brkpt_loc,
+                         FGFR3_RE_type = df_oncoplot$FGFR3_RE_loc,
+                         FGFR3_chr_SV = FGFR3_re_loc,
+                         RE_with_TACC3 = df_oncoplot$RE_with_TACC3,
+                         TACC3_brkpt = df_oncoplot$TACC3_brkpt_loc_sum)
+rownames(df_oncoplot) = onco_data_trunc$deidentifiedSpecimenName
+
+df_oncoplot$RE_FGFR3 = factor(df_oncoplot$RE_FGFR3, levels = c("inframe", "in-strand (frame-unknown)", "intergenic RE", "out-of-strand RE", "re_internal"))
+df_oncoplot$RE_FGFR3_re = factor(df_oncoplot$RE_FGFR3_re, levels = c("inframe", "in-strand (frame-unknown)", "intergenic RE", "out-of-strand RE", "re_internal"))
+df_oncoplot$FGFR3_brkpt = factor(df_oncoplot$FGFR3_brkpt, levels = c("intron 16", "exon 17", "intron 17", "exon 18", "exon 18_UTR"))
+df_oncoplot$FGFR3_RE_type = factor(df_oncoplot$FGFR3_RE_type, levels = c("upstream", "downstream"))
+df_oncoplot$FGFR3_chr_SV = factor(df_oncoplot$FGFR3_chr_SV, levels = c("Chr4", "Other"))
+df_oncoplot$TACC3_brkpt = factor(df_oncoplot$TACC3_brkpt, levels = c("intron 7", "intron 9", "intron 10", "others"))
+
+# color code for TCGA
+col_TCGA = c("BLCA" = "#000000", "Brain, GBM" = "#FFFF00", "LUSC" = "#b26120", "LUAD" = "#B3B3B3", "BRCA" = "#FF69B4", 
+             "Unknown primary" = "#606060", "KIRC" = "#CCCCFF", "CESC" = "#00FF00", "HNSC" = "#E6AB02", "Brain, LGG" = "#FFFFCC", 
+             "Brain, Astrocytoma" = "#D2EF92", "UCS" = "#990000", "CHOL" = "#377EB8", "COAD" = "#FDC086", 
+             "STAD" = "#7FC97F", "PAAD" = "#556b2f", "OV" = "#F4CAE4", "ESCA" = "#ff4500", "READ" = "#0000ff",
+             "SARC" = "#20b2aa", "Other" = "#2f4f4f")
+
+df_oncoplot$TCGA_type = factor(df_oncoplot$TCGA_type, levels = names(col_TCGA))
+
+ha_1 = HeatmapAnnotation(df = df_oncoplot %>% select(-Order, -RE_FGFR3_re, -FGFR3_RE_type), 
+                       col = list(TCGA_type = col_TCGA,
+                                  FGFR3_E1_E17_amp = c("Yes" = "#FFC300"),
+                                  FGFR3_mut = c("E18-trunc" = "#0C5D08", "E18-splice" = "#9BFF9D"),
+                                  RE_FGFR3 = c("inframe" = "#660000", "in-strand (frame-unknown)" = "#F90708", 
+                                               "intergenic RE" = "#FF66FF", "out-of-strand RE" = "#FFD700", "re_internal" = "#989CFD"),
+                                  FGFR3_brkpt = c("intron 16" = "#4469F2", "exon 17" = "#E8A8EF", "intron 17" = "#911eb4", "exon 18" = "#BFEF45", "exon 18_UTR" = "#567707"),
+                                  FGFR3_chr_SV = c("Chr4" = "#469990", "Other" = "#e6beff"),
+                                  RE_with_TACC3 = c("TRUE" = "black", "FALSE" = "white"),
+                                  TACC3_brkpt = c("intron 7" = "#00CC00", "intron 9" = "#0066CC", "intron 10" = "#990000", "others" = "#404040")), 
+                       na_col = "white", annotation_legend_param = list(TCGA_type = list(nrow = 5)))
+
+ha_2 = HeatmapAnnotation(df = df_oncoplot %>% select(-Order, -RE_FGFR3, -FGFR3_RE_type), 
+                       col = list(TCGA_type = col_TCGA,
+                                  FGFR3_E1_E17_amp = c("Yes" = "#FFC300"),
+                                  FGFR3_mut = c("E18-trunc" = "#0C5D08", "E18-splice" = "#9BFF9D"),
+                                  RE_FGFR3_re = c("inframe" = "#660000", "in-strand (frame-unknown)" = "#F90708", 
+                                               "intergenic RE" = "#FF66FF", "out-of-strand RE" = "#FFD700", "re_internal" = "#989CFD"),
+                                  FGFR3_brkpt = c("intron 16" = "#4469F2", "exon 17" = "#E8A8EF", "intron 17" = "#911eb4", "exon 18" = "#BFEF45", "exon 18_UTR" = "#567707"),
+                                  FGFR3_chr_SV = c("Chr4" = "#469990", "Other" = "#e6beff"),
+                                  RE_with_TACC3 = c("TRUE" = "black", "FALSE" = "white"),
+                                  TACC3_brkpt = c("intron 7" = "#00CC00", "intron 9" = "#0066CC", "intron 10" = "#990000", "others" = "#404040")), 
+                       na_col = "white", annotation_legend_param = list(TCGA_type = list(nrow = 5)))
+
+
+```
+
+# Oncoplot
+```{r, fig.width=12, fig.height=4}
+df_sort_v2= df_oncoplot %>% arrange(RE_FGFR3, FGFR3_brkpt, FGFR3_chr_SV, FGFR3_mut, FGFR3_E1_E17_amp)
+
+df_1 = df_sort_v2[which(df_sort_v2$RE_FGFR3 == "inframe"),]
+df_1 = df_1 %>% arrange(factor(TCGA_type, levels = names(sort(table(df_1$TCGA_type), decreasing = T))))
+df_2 = df_sort_v2[which(df_sort_v2$RE_FGFR3 == "in-strand (frame-unknown)"),]
+df_2 = df_2 %>% arrange(factor(TCGA_type, levels = names(sort(table(df_2$TCGA_type), decreasing = T))))
+df_3 = df_sort_v2[which(df_sort_v2$RE_FGFR3 == "intergenic RE"),]
+df_3 = df_3 %>% arrange(factor(TCGA_type, levels = names(sort(table(df_3$TCGA_type), decreasing = T))))
+df_4 = df_sort_v2[which(df_sort_v2$RE_FGFR3 == "out-of-strand RE"),]
+df_4 = df_4 %>% arrange(factor(TCGA_type, levels = names(sort(table(df_4$TCGA_type), decreasing = T))))
+df_5 = df_sort_v2[which(df_sort_v2$RE_FGFR3 == "re_internal"),]
+df_5 = df_5 %>% arrange(factor(TCGA_type, levels = names(sort(table(df_5$TCGA_type), decreasing = T))))
+df_RE = c(df_1$Order, df_2$Order, df_3$Order, df_4$Order, df_5$Order)
+
+df_1 = df_sort_v2[which(df_sort_v2$FGFR3_mut == "E18-trunc" & !(df_sort_v2$Order %in% c(df_RE))),]
+df_1 = df_1 %>% arrange(factor(TCGA_type, levels = names(sort(table(df_1$TCGA_type), decreasing = T))))
+df_2 = df_sort_v2[which(df_sort_v2$FGFR3_mut == "E18-splice" & !(df_sort_v2$Order %in% c(df_RE))),]
+df_2 = df_2 %>% arrange(factor(TCGA_type, levels = names(sort(table(df_2$TCGA_type), decreasing = T))))
+df_Mut = c(df_1$Order, df_2$Order)
+
+df_part_amp = df_sort_v2$Order[which(df_sort_v2$FGFR3_E1_E17_amp == "Yes")]
+setdiff(df_part_amp, c(df_RE, df_Mut))
+
+# all samples with E1-E17 has FGFR3 REs
+ind_ord = c(df_RE, df_Mut)
+
+hm = Heatmap(matrix = matrix(nrow=0, ncol = length(ind_ord)), top_annotation = ha_1[ind_ord])
+#pdf("~/FGFR/Daniel/R/files/FM_oncoplot.pdf", width = 12, height = 6)
+draw(hm, annotation_legend_side = "bottom", merge_legend = F)
+#dev.off()
+
+# Heatmap for reannotated FGFR3 RE
+df_sort_v2= df_oncoplot %>% arrange(RE_FGFR3_re, FGFR3_brkpt, FGFR3_chr_SV, FGFR3_mut, FGFR3_E1_E17_amp)
+
+df_1 = df_sort_v2[which(df_sort_v2$RE_FGFR3_re == "inframe"),]
+df_1 = df_1 %>% arrange(factor(TCGA_type, levels = names(sort(table(df_1$TCGA_type), decreasing = T))))
+df_2 = df_sort_v2[which(df_sort_v2$RE_FGFR3_re == "in-strand (frame-unknown)"),]
+df_2 = df_2 %>% arrange(factor(TCGA_type, levels = names(sort(table(df_2$TCGA_type), decreasing = T))))
+df_3 = df_sort_v2[which(df_sort_v2$RE_FGFR3_re == "intergenic RE"),]
+df_3 = df_3 %>% arrange(factor(TCGA_type, levels = names(sort(table(df_3$TCGA_type), decreasing = T))))
+df_4 = df_sort_v2[which(df_sort_v2$RE_FGFR3_re == "out-of-strand RE"),]
+df_4 = df_4 %>% arrange(factor(TCGA_type, levels = names(sort(table(df_4$TCGA_type), decreasing = T))))
+df_5 = df_sort_v2[which(df_sort_v2$RE_FGFR3_re == "re_internal"),]
+df_5 = df_5 %>% arrange(factor(TCGA_type, levels = names(sort(table(df_5$TCGA_type), decreasing = T))))
+df_RE = c(df_1$Order, df_2$Order, df_3$Order, df_4$Order, df_5$Order)
+
+df_1 = df_sort_v2[which(df_sort_v2$FGFR3_mut == "E18-trunc" & !(df_sort_v2$Order %in% c(df_RE))),]
+df_1 = df_1 %>% arrange(factor(TCGA_type, levels = names(sort(table(df_1$TCGA_type), decreasing = T))))
+df_2 = df_sort_v2[which(df_sort_v2$FGFR3_mut == "E18-splice" & !(df_sort_v2$Order %in% c(df_RE))),]
+df_2 = df_2 %>% arrange(factor(TCGA_type, levels = names(sort(table(df_2$TCGA_type), decreasing = T))))
+df_Mut = c(df_1$Order, df_2$Order)
+
+df_part_amp = df_sort_v2$Order[which(df_sort_v2$FGFR3_E1_E17_amp == "Yes")]
+setdiff(df_part_amp, c(df_RE, df_Mut))
+
+# all samples with E1-E17 has FGFR3 REs
+ind_ord = c(df_RE, df_Mut)
+
+hm = Heatmap(matrix = matrix(nrow=0, ncol = length(ind_ord)), top_annotation = ha_2[ind_ord])
+#pdf("~/FGFR/Daniel/R/files/FM_oncoplot.pdf", width = 12, height = 6)
+draw(hm, annotation_legend_side = "bottom", merge_legend = F)
+#dev.off()
+
+
+```
+
+# Partner frequency
+```{r, fig.width=8, fig.height=6}
+# partner gene
+Var1 = onco_data_trunc %>% filter(FGFR3_RE_loc == "upstream") %>% 
+    mutate(gene2_RE = ifelse(gene2_RE == "", "Intergenic", gene2_RE)) %>% pull(gene2_RE)
+df = data.frame(table(Var1), stringsAsFactors = F) %>% arrange(desc(Freq))
+df2 = rbind(df[df$Freq>=2,], data.frame(Var1 = "others", Freq = sum(df$Freq[df$Freq<2])))
+df2$Partner = paste(df2$Var1, " (", df2$Freq, ")", sep = "")
+df2$Partner = factor(df2$Partner, levels = rev(as.character(df2$Partner)))
+p1 = ggplot(df2, aes(x = "", y = Freq, fill = Partner)) + geom_bar(stat = "identity", width = 1) + scale_fill_brewer(palette="Set3") +
+  coord_polar("y", start = 0)  + theme_void() + guides(fill = guide_legend(reverse = TRUE))
+
+
+# TACC3 location
+df = data.frame(table(onco_data_trunc$TACC3_brkpt_loc)) %>% arrange(desc(Freq))
+colnames(df) = c("TACC3_loc", "Freq")
+df2 = rbind(df[df$Freq>=10,], data.frame(TACC3_loc = "others", Freq = sum(df$Freq[df$Freq<10])))
+df2$TACC3_loc = factor(df2$TACC3_loc, levels = rev(as.character(df2$TACC3_loc)))
+
+p2 = ggplot(df2, aes(x = "", y = Freq, fill = TACC3_loc)) + geom_bar(stat = "identity", width = 1) +
+  coord_polar("y", start = 0) + theme_void() + guides(fill = guide_legend(reverse = TRUE))
+
+#pdf("~/FGFR3/nvim_R/figures/partner_freq.pdf", width=8, height=6)
+p1 + p2
+#dev.off()
+
+```
+
+# co-alterations
+```{r}
+t_mut = mut_sum_mat_pan[match(rownames(df_oncoplot), rownames(mut_sum_mat_pan)),
+                        order(colSums(!is.na(mut_sum_mat_pan)), decreasing = T)]
+
+# common genes
+coalt_FGFR3_trunc = vector("list", length = 6)
+for(i in 1:6){
+    coalt_FGFR3_trunc[[i]] = xlsx::read.xlsx2(file = "~/Dropbox/Work_Netherlands/FGFR3/FGFR3 Trunc Concurrent Alts.xlsx", 
+                                               sheetIndex = i, header = T, stringsAsFactors = F)
+}
+mut_genes = intersect(intersect(intersect(unique(coalt_FGFR3_trunc[[2]]$gene), unique(coalt_FGFR3_trunc[[3]]$gene)),
+          unique(coalt_FGFR3_trunc[[5]]$gene)), unique(coalt_FGFR3_trunc[[1]]$gene))
+
+t_mut = t_mut[, colnames(t_mut) %in% mut_genes]
+
+# Sorting based on mutation frequency
+sort_mut = function(mut_mat){
+    mut_mat_bin = !is.na(mut_mat)
+    for(i in 1:ncol(mut_mat_bin)){
+        ind = order(mut_mat_bin[, ncol(mut_mat_bin)-i+1], decreasing = T)
+        mut_mat_bin = mut_mat_bin[ind,]
+    }
+    return(mut_mat_bin)
+}
+```
+
+# oncoplot function
+```{r, fig.width = 12, fig.height = 10}
+# "col" should be defined first before using oncoprint (included in alter_fun))
+col = c("amplification" = "red", "deletion" = "blue", "truncation" = "#660099", "splice_nonfs" = "black",
+        "missense" = "#008000", "promoter" = "#676700")
+
+alter_fun = list(
+  background = function(x, y, w, h) {
+        grid.rect(x, y, w-unit(0.5, "mm"), h-unit(0.5, "mm"), 
+            gp = gpar(fill = "white", col = NA))
+  },
+  
+  # amplification
+  amplification = function(x, y, w, h) {
+    grid.rect(x, y, w-unit(0.5, "mm"), h-unit(0.5, "mm"), 
+              gp = gpar(fill = col["amplification"], col = NA))
+  },
+  
+  # deletion
+  deletion = function(x, y, w, h) {
+    grid.rect(x, y, w-unit(0.5, "mm"), h-unit(0.5, "mm"),
+              gp = gpar(fill = col["deletion"], col = NA))
+  },
+  
+  # promoter
+  promoter = function(x, y, w, h) {
+    grid.rect(x, y, w-unit(0.5, "mm"), h*0.33, 
+              gp = gpar(fill = col["promoter"], col = NA))
+  },
+  
+  # truncation
+  truncation = function(x, y, w, h) {
+    grid.rect(x, y, w-unit(0.5, "mm"), h*0.33, 
+              gp = gpar(fill = col["truncation"], col = NA))
+  },
+  
+  # missense
+  missense = function(x, y, w, h) {
+    grid.rect(x, y, w-unit(0.5, "mm"), h*0.33, 
+              gp = gpar(fill = col["missense"], col = NA))
+  },
+  
+  # splice & nonframeshift
+  splice_nonfs = function(x, y, w, h) {
+    grid.rect(x, y, w-unit(0.5, "mm"), h*0.33, 
+              gp = gpar(fill = col["splice_nonfs"], col = NA))
+  }
+)
+
+
+t_mat_RE = sort_mut(t_mut[df_RE,])
+t_mat_mut = sort_mut(t_mut[df_Mut,])
+
+t_mat = rbind(t_mat_RE, t_mat_mut)
+ind = df_oncoplot$Order[match(rownames(t_mat), rownames(df_oncoplot))]
+
+hm = oncoPrint(t(t_mut[ind,]), alter_fun = alter_fun, col = col, top_annotation = ha_2[ind], 
+          right_annotation = rowAnnotation(Frequency = anno_oncoprint_barplot(border = T, axis_param = list(side = "bottom", labels_rot = 0))),
+          column_order = 1:nrow(t_mut), use_raster = F,
+          column_title = paste("Pancancer: ", "n = ", length(ind), sep = ""))
+draw(hm, annotation_legend_side = "bottom", merge_legend = F)
+
+```
+
+# Cancer-type
+```{r, fig.width = 12, fig.height = 10}
+# BLCA
+ind2 = ind[which(df_oncoplot$TCGA_type[ind] == "BLCA")]
+hm_1 = oncoPrint(t(t_mut[ind2,]), alter_fun = alter_fun, col = col, top_annotation = ha_2[ind2], 
+          right_annotation = rowAnnotation(Frequency = anno_oncoprint_barplot(border = T, axis_param = list(side = "bottom", labels_rot = 0))),
+          column_order = 1:nrow(t_mut[ind2,]), use_raster = F,
+          column_title = paste("BLCA: ", "n = ", length(ind2), sep = ""))
+
+draw(hm_1, annotation_legend_side = "bottom", merge_legend = F)
+
+# GBM
+ind2 = ind[which(df_oncoplot$TCGA_type[ind] == "Brain, GBM")]
+hm_2 = oncoPrint(t(t_mut[ind2,]), alter_fun = alter_fun, col = col, top_annotation = ha_2[ind2], 
+          right_annotation = rowAnnotation(Frequency = anno_oncoprint_barplot(border = T, axis_param = list(side = "bottom", labels_rot = 0))),
+          column_order = 1:nrow(t_mut[ind2,]), use_raster = F,
+          column_title = paste("GBM: ", "n = ", length(ind2), sep = ""))
+draw(hm_2, annotation_legend_side = "bottom", merge_legend = F)
+
+# LUSC/LUAD
+ind2 = ind[which(df_oncoplot$TCGA_type[ind] == "LUSC" | df_oncoplot$TCGA_type[ind] == "LUAD")]
+hm_3 = oncoPrint(t(t_mut[ind2,]), alter_fun = alter_fun, col = col, top_annotation = ha_2[ind2], 
+          right_annotation = rowAnnotation(Frequency = anno_oncoprint_barplot(border = T, axis_param = list(side = "bottom", labels_rot = 0))),
+          column_order = 1:nrow(t_mut[ind2,]), use_raster = F,
+          column_title = paste("LUSC/LUAD: ", "n = ", length(ind2), sep = ""))
+pdf("~/Dropbox/Work_Netherlands/FGFR3/R/figures/FGFR3_coalterations_lung.pdf", width = 14, height = 10)
+draw(hm_3, annotation_legend_side = "bottom", merge_legend = F)
+dev.off()
+```
+# Co-occurence across the tumor types
+```{r, fig.width = 8, fig.height = 6}
+target_tumors = c("BLCA", "Brain, GBM", "Brain", "LUSC|LUAD", "BRCA")
+df_coocur = c()
+for(i in 1:length(target_tumors)){
+    ind_target = ind[grep(target_tumors[i], df_oncoplot$TCGA_type[ind])]
+    t_freq = colSums(!is.na(t_mut[ind_target,]))/length(ind_target)
+    df_coocur = rbind(df_coocur, 
+                      data.frame(Type = target_tumors[i],
+                           Gene = names(t_freq),
+                           Freq = t_freq))
+}
+df_coocur = df_coocur %>% mutate(Gene = factor(Gene, levels = colnames(t_mut)))
+
+ggplot(df_coocur, aes(x = Gene, y = Freq, fill = Type)) + 
+    geom_bar(stat = "identity", position = position_dodge()) + theme_classic()
+
+```
+# C-trunc mutation vs REs
+```{r, fig.width = 10, fig.height=6}
+prop_test = function(mut_binary, ind_RE, ind_mut){
+    t_mat = matrix(0, nrow(mut_binary), 2)
+    t_mat[ind_RE, 1] = 1
+    t_mat[ind_mut, 2] = 1
+    t_ind = which(rowSums(t_mat)!=0)
+    t_mat = t_mat[t_ind,]
+    
+    prop_out = matrix(NA, ncol(mut_binary), 4)
+    for(i in 1:ncol(mut_binary)){
+      t_mat_comb = cbind(t_mat, target = mut_binary[t_ind, i])
+      
+      # RE vs Mut
+      x1 = c(sum(rowSums(t_mat_comb[,c(1,3)]) == 2), 
+             sum(rowSums(t_mat_comb[, c(2,3)])==2))
+      n1 = c(sum(t_mat_comb[,1]), sum(t_mat_comb[,2])) # number of trunc-samples and others (full amp / hotspot) 
+      t_stat = fisher.test(rbind(x1, n1-x1))
+     
+      prop_out[i,1:2] = x1/n1
+      prop_out[i,3] = t_stat$p.value
+    }
+    prop_out[,4] = p.adjust(prop_out[,3], "BH")
+    colnames(prop_out) = c("Prop_RE", "Prop_Mut", "Pval", "FDR")
+    rownames(prop_out) = colnames(mut_binary) 
+    return(prop_out)
+}
+
+mut_binary_mat_pan = mut_binary_mat_pan[match(rownames(df_oncoplot), rownames(mut_binary_mat_pan)),
+                                        match(colnames(t_mut), colnames(mut_binary_mat_pan))]
+prop_res = vector("list", length(target_tumors))
+for(i in 1:length(target_tumors)){
+    ind_RE = df_oncoplot %>% filter(grepl(target_tumors[i], TCGA_type), !is.na(RE_FGFR3)) %>% pull(Order)
+    ind_Mut = df_oncoplot %>% filter(grepl(target_tumors[i], TCGA_type), !is.na(FGFR3_mut)) %>% pull(Order)
+    prop_res[[i]] = prop_test(mut_binary_mat_pan, ind_RE, ind_Mut)
+}
+names(prop_res) = target_tumors
+
+for(i in 1:length(prop_res)){
+    t_df = rbind(data.frame(Gene = rownames(prop_res[[i]]), Group = "Prop_RE", Freq = prop_res[[i]][,1]),
+                 data.frame(Gene = rownames(prop_res[[i]]), Group = "Prop_Mut", Freq = prop_res[[i]][,2])) %>%
+        mutate(Gene = factor(Gene, levels = rownames(prop_res[[i]])))
+    p = ggplot(t_df, aes(x = Group, y = Freq, fill = Group)) + geom_bar(stat = "identity") +
+        facet_wrap(.~Gene, ncol = 5) + 
+        ggtitle(names(prop_res)[i])
+    print(p)
+}
+
+```
+

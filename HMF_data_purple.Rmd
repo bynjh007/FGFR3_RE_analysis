@@ -1,0 +1,307 @@
+---
+title: "HMF_data_plots"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, message=FALSE}
+library(ComplexHeatmap)
+library(circlize)
+library(ggplot2)
+library(GenomicFeatures)
+library(tidyr)
+library(dplyr)
+```
+
+# PURPLE data
+```{r}
+# loading the purple annotation data
+FGFR3_SV_PURPLE_ALL = R.utils::loadToEnv("~/Dropbox/Work_Netherlands/FGFR3/R/HMF_data_purple.RData")[["FGFR3_PURPLE_ALL"]]
+SAMPLE_LIST_ALL = R.utils::loadToEnv("~/Dropbox/Work_Netherlands/FGFR3/R/HMF_data_purple.RData")[["target_samp"]]
+FGFR3_SV_PURPLE_ALL = FGFR3_SV_PURPLE_ALL %>% mutate(C_trunc = replace(C_trunc, (grepl("Exon", up.loc_in_trx) & C_trunc == T), FALSE))
+
+# samples to be analyzed : samples with non-SGL SVs from purple
+FGFR3_SV_PURPLE_TARGET = FGFR3_SV_PURPLE_ALL %>% filter(RE_type != "SGL")
+
+target_samp = unique(FGFR3_SV_PURPLE_TARGET %>% pull(sample_name))
+
+# sample information
+samp_info_meta = read.table("/DATA/projects/j.bhin/Daniel_FGFR2/HMF/metadata/metadata.tsv", sep = "\t", stringsAsFactors = F, header = T, comment.char = "")
+samp_info_target = samp_info_meta[match(target_samp, samp_info_meta$setName),]
+
+purple_path = "/DATA/projects/j.bhin/Daniel_FGFR2/HMF/somatics/"
+
+# CNV
+FGFR3_CNV = rep(NA, length(target_samp))
+for(i in 1:length(target_samp)){
+  t_path = paste(purple_path, target_samp[i], sep = "")
+  t_files = list.files(t_path)
+  t_df = read.table(paste(t_path, t_files[grepl("cnv.gene", t_files)], sep = "/"), header = T, stringsAsFactors = F, sep = "\t")
+  FGFR3_CNV[i] = t_df %>% filter(gene == "FGFR3") %>% pull(maxCopyNumber)
+}
+names(FGFR3_CNV) = samp_info_target$sampleId
+
+```
+
+# Data processing for oncoplot 
+```{r}
+FGFR3_SV_PURPLE_TARGET = FGFR3_SV_PURPLE_TARGET %>% 
+  mutate(RE_FGFR3 = as.character(RE_type)) %>%
+  mutate(Tumor_type = samp_info_target$primaryTumorLocation[match(sample_name, samp_info_target$setName)],
+         Gender = samp_info_target$gender[match(sample_name, samp_info_target$setName)]) %>%
+  mutate(Gender = replace(Gender, Gender == "female", "F"),
+         Gender = replace(Gender, Gender == "male", "M")) %>%
+  mutate(Tumor_type = factor(Tumor_type, levels = names(sort(table(Tumor_type), decreasing = T)))) %>%
+  mutate(FGFR3_cnv = FGFR3_CNV[match(sample_name, samp_info_target$setName)]) %>%
+  mutate(RE_FGFR3 = replace(RE_FGFR3, grepl("out-of-frame", RE_FGFR3), "in-strand (frame-unknown)"),
+         RE_FGFR3 = replace(RE_FGFR3, RE_FGFR3 == "in-frame", "inframe"),
+         RE_FGFR3 = replace(RE_FGFR3, RE_FGFR3 == "intergenic", "intergenic RE"),
+         RE_FGFR3 = replace(RE_FGFR3, RE_FGFR3 == "out-of-strand", "out-of-strand RE"),
+         RE_FGFR3 = replace(RE_FGFR3, RE_FGFR3 == "internal", "re_internal")) %>%
+  mutate(FGFR3_SV_loc = ifelse(up.gene_symbol == "FGFR3", up.loc_in_trx, down.loc_in_trx),
+         FGFR3_brkpt = rep(NA, nrow(FGFR3_SV_PURPLE_TARGET)),
+         FGFR3_brkpt = replace(FGFR3_brkpt, stringr::str_split_fixed(FGFR3_SV_loc, ":", 6)[,6] == "Intron 17", "I17"),
+         FGFR3_brkpt = replace(FGFR3_brkpt, stringr::str_split_fixed(FGFR3_SV_loc, ":", 6)[,6] == "Exon 18", "E18"),
+         FGFR3_brkpt = replace(FGFR3_brkpt, is.na(FGFR3_brkpt), "5' to E17"),
+         parter_SV_chr = ifelse(up.gene_symbol == "FGFR3", as.character(down.seqnames), as.character(up.seqnames)),
+         FGFR3_chr_SV = ifelse(parter_SV_chr == "chr4", "Intrachromosomal", "Interchromosomal"),
+         RE_location = ifelse(FGFR3_is_upstream == TRUE, "FGFR3 is upstream", "FGFR3 is downstream"),
+         fusion_id = paste(up.gene_symbol, down.gene_symbol, sep = "_"))
+
+# removing the SVs with upstream is out-of-strand orientation
+FGFR3_SV_PURPLE_TARGET_FILT = FGFR3_SV_PURPLE_TARGET %>% filter(!(up.RE_category == "out-of-strand" & RE_FGFR3 != "re_internal"))
+```
+
+# representative SVs if multiple SVs exist
+```{r}
+target_samp_2 = unique(FGFR3_SV_PURPLE_TARGET_FILT$sample_name)
+FGFR3_SV_rep = c()
+for(i in 1:length(target_samp_2)){
+  t_sv = FGFR3_SV_PURPLE_TARGET_FILT %>% filter(sample_name == target_samp_2[i])
+  t_purple = t_sv %>% 
+    arrange(desc(C_trunc), up.RE_category, desc(RE_location), factor(RE_type))
+  FGFR3_SV_rep = rbind(FGFR3_SV_rep, t_purple[1,])
+}
+
+FGFR3_SV_rep = FGFR3_SV_rep %>% mutate(FGFR3_amp = FGFR3_cnv>=5,
+                                       Gender = replace(Gender, Gender == "NULL", NA),
+                                       RE_FGFR3 = factor(RE_FGFR3, levels = c("inframe", "in-strand (frame-unknown)", 
+                                                "intergenic RE", "out-of-strand RE", "re_internal")))
+```
+
+# RNA-seq data
+```{r}
+load("~/FGFR3/R_project/HMF_FGFR3_RNAseq.RData")
+
+list_RNA_samples = list.files("/DATA/projects/j.bhin/Daniel_FGFR3/HMF/RNAseq/bam/")
+list_RNA_samples = data.frame(sample = stringr::str_split_fixed(list_RNA_samples, "_", 3)[,1], stringsAsFactors = F, RNA_file = list_RNA_samples) %>%
+  mutate(PURPLE_file = samp_info_meta$setName[match(sample, samp_info_meta$sampleId)])
+
+```
+
+# matching the RNA-seq-deriven REs with purple-deriven REs
+```{r}
+map_REs = matrix(NA, nrow(FGFR3_SV_rep), 2)
+for(i in 1:nrow(FGFR3_SV_rep)){
+  t_purple = FGFR3_SV_rep[i,] %>% mutate(X.FusionName = paste(up.gene_symbol, down.gene_symbol, sep ="--"))
+  t_star_fusion = FGFR3_star_fusion %>% filter(grepl((samp_info_target %>% filter(setName == FGFR3_SV_rep$sample_name[i]) %>% pull(sampleId)), sample_id))
+  t_star_re = FGFR3_RE %>% filter(grepl((samp_info_target %>% filter(setName == FGFR3_SV_rep$sample_name[i]) %>% pull(sampleId)), sample_id)) %>% 
+    mutate(X.FusionName = paste(up.symbol, down.symbol, sep = "--"))
+  
+  # find the fusion genes mapped to purple breakpoint
+  t_star_fusion_ovp = t_star_fusion %>% filter(X.FusionName %in% t_purple$X.FusionName) %>%
+    mutate(brkpt_loc = paste(stringr::str_split_fixed(left_annot, ":", 5)[,3], stringr::str_split_fixed(right_annot, ":", 5)[,3], sep = "-"),
+           brkpt_ref = paste(stringr::str_split_fixed(left_annot, ":", 5)[,4], stringr::str_split_fixed(right_annot, ":", 5)[,4], sep = "-"),
+           brkpt = paste(brkpt_loc, brkpt_ref, sep = ":"),
+           PROT_FUSION_TYPE = ifelse(PROT_FUSION_TYPE == "INFRAME", "inframe", "out-of-frame"))
+  t_star_re_ovp = t_star_re %>% filter(X.FusionName %in% t_purple$X.FusionName) %>%
+    mutate(brkpt = paste(up.id, "-", down.id, ":", 
+                         stringr::str_split_fixed(up.splice_type, ":", 2)[,1], "-", stringr::str_split_fixed(down.splice_type, ":", 2)[,1], sep = ""),
+           PROT_FUSION_TYPE = "out-of-frame",
+           PROT_FUSION_TYPE = replace(PROT_FUSION_TYPE, is.na(down.symbol), "intergenic"),
+           PROT_FUSION_TYPE = replace(PROT_FUSION_TYPE, grepl("out-of-strand", down.splice_type), "out-of-strand"),
+           PROT_FUSION_TYPE = replace(PROT_FUSION_TYPE, up.symbol == "FGFR3" & down.symbol == "FGFR3", "internal REs"))
+                                                                           
+  t_comb = unique(rbind(t_star_fusion_ovp %>% select(X.FusionName, brkpt, PROT_FUSION_TYPE), 
+                        t_star_re_ovp %>% select(X.FusionName, brkpt, PROT_FUSION_TYPE)))
+  t_comb$brkpt = gsub("Exon ", "E", t_comb$brkpt)
+  t_comb$brkpt = gsub("Intron ", "I", t_comb$brkpt)
+  t_comb$label = do.call("paste", c(t_comb, sep = "/"))
+  
+  if(nrow(t_comb)!=0){
+    map_REs[i, 1:nrow(t_comb)] = t_comb$label
+  } else if(!(FGFR3_SV_rep$sample_name[i] %in% list_RNA_samples$PURPLE_file)){
+    map_REs[i,] = "no data"
+  } else {
+    map_REs[i,] = NA
+  }
+}
+colnames(map_REs) = paste("RNAseq", 1:ncol(map_REs), sep = ".")
+
+FGFR3_SV_rep = data.frame(FGFR3_SV_rep, map_REs)
+```
+
+
+# setting for drawing oncoplot
+```{r, fig.width=10}
+
+col_tumor = c("Urinary tract" = "#000000", "Nervous system" = "#CCCCFF", "Breast" = "#FF69B4",
+              "Colon/Rectum" = "#FDC086", "Biliary" = "#80B1D3", "Anus" = "#009900")
+
+df_samp = FGFR3_SV_rep[, c("Tumor_type", "Gender", "FGFR3_amp", "RE_FGFR3", "RE_location", "FGFR3_brkpt", "FGFR3_chr_SV")]
+t = stringr::str_split_fixed(FGFR3_SV_rep$RNAseq.1, "/", 3)
+a = stringr::str_split_fixed(t[,1], "--", 2)
+b = stringr::str_split_fixed(t[,2], "-|:", 3)
+  
+df_samp = df_samp %>% mutate(RNAseq = t[,3])
+
+df_samp$Tumor_type = factor(df_samp$Tumor_type, levels = names(col_tumor))
+df_samp$RNAseq = factor(df_samp$RNAseq, levels = c("inframe", "out-of-frame", "intergenic", "out-of-strand"))
+
+ha = HeatmapAnnotation(df = df_samp, 
+                       col = list(Tumor_type = col_tumor, 
+                                  Gender = c("F" = "#FFC0CB", "M" = "#CCE5FF"),
+                                  FGFR3_amp = c("TRUE" = "black", "FALSE" = "white"),
+                                  RE_FGFR3 = c("inframe" = "#660000", "in-strand (frame-unknown)" = "#F90708", 
+                                               "intergenic RE" = "#FF66FF", "out-of-strand RE" = "#FFD700", "re_internal" = "#989CFD"),
+                                  RE_location = c("FGFR3 is upstream" = "#A30059", "FGFR3 is downstream" = "#006FA6"),
+                                  FGFR3_brkpt = c("I17" = "#911eb4", "5' to E17" = "#42d4f4", "E18" = "#BFEF45"),
+                                  FGFR3_chr_SV = c("Intrachromosomal" = "#469990", "Interchromosomal" = "#e6beff"),
+                                  RNAseq = c("inframe" = "#660000", "out-of-frame" = "#F90708", "intergenic" = "#FF66FF", "out-of-strand" = "#FFD700")),
+                       na_col = "white", annotation_legend_param = list(Tumor_type = list(nrow = 5)))
+
+# sorting fusions
+index = df_samp %>% mutate(index = 1:nrow(df_samp)) %>% 
+  arrange(RE_FGFR3, desc(FGFR3_brkpt), desc(RE_location), Tumor_type,  desc(FGFR3_chr_SV), desc(FGFR3_amp)) %>% pull(index)
+
+t_mat = matrix(nrow=0, ncol = length(index))
+colnames(t_mat) = paste(a[,1], "(", b[,1], ")", "-", a[,2], "(", b[,2], ")", sep = "")
+colnames(t_mat)[grep("\\(\\)", colnames(t_mat))] = ""
+colnames(t_mat) = gsub("\\(intergenic\\)", "", colnames(t_mat))
+  
+hm = Heatmap(matrix = t_mat[,index], top_annotation = ha[index], column_names_gp = gpar(fontsize = 8))
+
+#pdf("~/FGFR3/files/HMF_oncoplot.pdf", width = 8, height = 5)
+draw(hm, annotation_legend_side = "bottom", merge_legend = F)
+#dev.off()
+```
+
+# location of SV in FGFR3
+```{r, fig.width=12, fig.height=2}
+hg19_info = R.utils::loadToEnv("~/FGFR/Daniel/R/R_files/HMF_data_SV_RNA_v2.RData")[["hg19_info"]]
+TXID = hg19_info$trx_gene_AA_major %>% filter(SYMBOL == "FGFR3") %>% pull(TXID)
+
+ind = as.numeric(TXID)
+t_exon = hg19_info$trx_exon[[ind]]
+t_intron = hg19_info$trx_intron[[ind]]
+t_str = unique(as.character(strand(t_exon)))
+
+if(t_str == "-"){
+  t_intron = rev(t_intron)
+}
+
+df1 = data.frame(data.frame(t_exon)[, c(1,2,3,5)], id = paste("Exon", 1:length(t_exon)))
+df2 = rbind(data.frame(data.frame(t_intron)[, c(1,2,3,5)], id = paste("Intron", 1:length(t_intron))), NA)
+df_comb = (gdata::interleave(df1, df2))
+df_comb = df_comb[-nrow(df_comb),]
+df_comb$width = df_comb$end - df_comb$start
+
+a = df_comb$start - 1795039
+b = df_comb$end - 1795039
+
+range_lab = rep("", max(c(a,b)))
+for(i in 1:length(a)){
+  range_lab[a[i]] = as.character(df_comb$id[i])
+}
+
+FGFR3_SV_brkpt = FGFR3_SV_rep %>%
+ mutate(FGFR3_brkpt = ifelse(up.gene_symbol == "FGFR3", up.start, down.start),
+        FGFR3_brkpt_ori = ifelse(up.gene_symbol == "FGFR3", up.orientation, down.orientation)) %>% select(FGFR3_brkpt, FGFR3_brkpt_ori)
+
+# first element: 3'-end (end) of the transcript, last element: 5'-end (start) of transcript
+brkpt_1 = as.numeric(c(1:max(c(a,b))) %in% (FGFR3_SV_brkpt$FGFR3_brkpt[FGFR3_SV_brkpt$FGFR3_brkpt_ori==1] - 1795039))
+brkpt_2 = as.numeric(c(1:max(c(a,b))) %in% (FGFR3_SV_brkpt$FGFR3_brkpt[FGFR3_SV_brkpt$FGFR3_brkpt_ori==(-1)] - 1795039))
+brkpt = as.numeric(as.logical(brkpt_1 + brkpt_2))
+
+at_tick = c(0, which(range_lab != ""), max(c(a,b)))
+at_tick_label = as.character(df_comb$id) # rev for - strand
+at_tick_label[grepl("exon", at_tick_label)] = ""
+at_tick_label_pos = c()
+for(i in 1:(length(at_tick)-1)){
+  at_tick_label_pos = c(at_tick_label_pos,  (at_tick[i] + at_tick[i+1])/2)
+}
+
+#pdf("~/FGFR3/files/HMF_brkpt_loci.pdf", width = 12, height = 2)
+barplot(brkpt, space = 0, axes = FALSE, border = "blue") 
+axis(side = 1, at = at_tick - 1, labels = FALSE)
+axis(side = 1, at = at_tick_label_pos, tick = FALSE, labels = at_tick_label, las = 2, cex.axis = 0.3)
+#dev.off()
+
+# sliding window
+bin_size = 300
+a = rep(NA, length(brkpt))
+for(i in 1:length(brkpt)){
+  a[i] = sum(brkpt[i:(bin_size+i)])
+}
+
+#pdf("~/FGFR3/files/HMF_brkpt_window.pdf", width = 12, height = 2)
+barplot(a, ylim = c(0, 6))
+#dev.off()
+
+```
+# circular plot
+```{r, fig.width=6, fig.height=6}
+library(OmicCircos)
+trx_df = data.frame(hg19_info$trx)
+##############################
+# all SV connections
+##############################
+circ_gene = hg19_info$trx_gene_AA_major %>% 
+  filter(SYMBOL %in% unique(c(FGFR3_SV_rep$up.gene_symbol, FGFR3_SV_rep$down.gene_symbol))) %>%
+  mutate(chr = gsub("chr", "", trx_df$seqnames[match(TXNAME, trx_df$tx_name)]),
+         pos = trx_df$start[match(TXNAME, trx_df$tx_name)]) %>% 
+  select(chr, pos, SYMBOL)
+
+circ_fus = FGFR3_SV_rep %>% 
+  mutate(gene1 = up.gene_symbol,
+         gene2 = down.gene_symbol,
+         chr1 = gsub("chr", "", up.seqnames),
+         chr2 = gsub("chr", "", down.seqnames),
+         RE_RNAseq = stringr::str_split_fixed(RNAseq.1, "/", 3)[,3]) %>%
+  filter(RE_RNAseq != "") %>%
+  select(chr1, up.start, gene1, chr2, down.start, gene2, RE_RNAseq) 
+
+cols = rep(NA, nrow(circ_fus))
+cols[which(circ_fus$RE_RNAseq == "inframe")] = "#660000"
+cols[which(circ_fus$RE_RNAseq == "out-of-frame")] = "#F90708"
+cols[which(circ_fus$RE_RNAseq == "intergenic")] = "#FF66FF"
+cols[which(circ_fus$RE_RNAseq == "out-of-strand")] = "#FFD700"
+
+#pdf("~/FGFR3/files/circos_chr.pdf")
+par(mar=c(2, 2, 2, 2))
+plot(c(1,800), c(1,800), type="n", axes=FALSE, xlab="", ylab="", main="")
+circos(R=300, cir="hg19", type="chr", print.chr.lab=T, W=10)
+circos(R = 310, cir = "hg19", W = 20, mapping = circ_gene, type = "label", side = "out", col = "red", cex = 0.4)
+circos(R = 290, cir="hg19", W = 50, mapping = circ_fus, type = "link", lwd = 1, col = cols)
+#dev.off()
+
+df = stringr::str_split_fixed(FGFR3_SV_rep %>% filter(FGFR3_brkpt %in% c("I17", "E18")) %>% pull(RNAseq.1), "/", 3)[,c(1,3)]
+df[,1] = stringr::str_split_fixed(df[,1], "--", 2)[,2]
+df[df[,1] == "NA",1] = "intergenic"
+df = data.frame(data.frame(partner = df[,1], type = df[,2]) %>% group_by(partner, type) %>% summarise(n = n()))
+df$partner = paste(df$partner, " (", df$n, ")", sep = "")
+df$partner = factor(df$partner, levels = rev(c("TACC3 (5)", "JAKMIP1 (2)", "MAEA (1)", "intergenic (1)")))
+
+p = ggplot(df, aes(x="", y=n, fill=partner)) +
+  geom_bar(stat="identity", width=1) +
+  coord_polar("y", start=0) + theme_void() +
+  scale_fill_manual(values=c("#999999", "#E69F00", "#56B4E9", "purple")) +
+  guides(fill = guide_legend(reverse = TRUE))
+
+#pdf("~/FGFR3/files/pie_partners.pdf")
+print(p)
+#dev.off()
+```
