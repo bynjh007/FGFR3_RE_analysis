@@ -1,0 +1,512 @@
+---
+title: "drug_response_CCLE_v2"
+output: html_document
+---
+
+```{r, include = F}
+knitr::opts_chunk$set(echo = TRUE, message = F, warning = F)
+```
+
+# Libraries
+```{r}
+options(java.parameters = "-Xmx10000m") # prevent error when export xlsx file
+library(RColorBrewer)
+library(dplyr)
+library(ggplot2)
+library(patchwork)
+library(xlsx)
+```
+
+# FM pre-processed data
+```{r}
+load("~/Dropbox/Work_Netherlands/FGFR/FGFR2_C_trunc/Nature_figures/data/FM/FM_FGFR2_coalterations.RData")
+onco_data_new = R.utils::loadToEnv("~/Dropbox/Work_Netherlands/FGFR/FGFR2_C_trunc/Nature_figures/data/FM/FM_FGFR2_vars.RData")[["onco_data_new"]]
+onco_data_new = data.frame(Index = 1:nrow(onco_data_new), onco_data_new)
+```
+
+# Ext Fig 2b
+FGFR2 I17/E18 REs distribution in FGFR2 amplified tumors  
+```{r}
+df_Ext_Fig2b = FMI_tumors %>% 
+    filter(!is.na(RE_FGFR2)) %>%
+    select(FGFR2_amp, RE_FGFR2, TCGA_type) %>%
+    mutate(RE_FGFR2 = replace(RE_FGFR2, RE_FGFR2 == "in-frame", "In-frame fusion"),
+           RE_FGFR2 = replace(RE_FGFR2, RE_FGFR2 == "in-strand (frame-unknown)", "Frame unknown"),
+           RE_FGFR2 = replace(RE_FGFR2, RE_FGFR2 == "intergenic RE", "Intergenic space"),
+           RE_FGFR2 = replace(RE_FGFR2, RE_FGFR2 == "out-of-strand RE", "Out-of-strand"),
+           RE_FGFR2 = replace(RE_FGFR2, RE_FGFR2 == "re_internal", "Internal"),
+           RE_FGFR2 = factor(RE_FGFR2, levels = c("In-frame fusion", "Frame unknown", "Intergenic space", "Out-of-strand", "Internal"))) %>%
+    mutate(FGFR2_amp = ifelse(is.na(FGFR2_amp) | FGFR2_amp == "", "None", FGFR2_amp),
+           FGFR2_amp = replace(FGFR2_amp, FGFR2_amp == "E1-17 amplification", "E1-E17"),
+           FGFR2_amp = replace(FGFR2_amp, FGFR2_amp == "Full amplification", "E1-E18"),
+           FGFR2_amp = factor(FGFR2_amp, levels = c("None", "E1-E17", "E1-E18")))
+
+# plot
+p_RE_amp_pan = ggplot(df_Ext_Fig2b %>% group_by(FGFR2_amp, RE_FGFR2) %>% summarise(n = n()),
+       aes(x = FGFR2_amp, y = n, fill = RE_FGFR2)) +
+    geom_bar(stat = "identity", position = "fill") +
+    scale_fill_manual(values = c("In-frame fusion" = "#660000", "Frame unknown" = "#F90708",
+                        "Intergenic space" = "#FF66FF", "Out-of-strand" = "#FFD700", "Internal" = "#989CFD")) +
+    scale_y_continuous(labels = scales::percent) + 
+    theme_classic() + theme(plot.title = element_text(hjust = 0.5)) + 
+    ggtitle("pan-cancer") + ylab("Distibution (%)")
+
+p_RE_amp_brca = ggplot(df_Ext_Fig2b %>% filter(TCGA_type == "BRCA") %>% group_by(FGFR2_amp, RE_FGFR2) %>% summarise(n = n()),
+       aes(x = FGFR2_amp, y = n, fill = RE_FGFR2)) +
+    geom_bar(stat = "identity", position = "fill") +
+    scale_fill_manual(values = c("In-frame fusion" = "#660000", "Frame unknown" = "#F90708",
+                        "Intergenic space" = "#FF66FF", "Out-of-strand" = "#FFD700", "Internal" = "#989CFD")) +
+    scale_y_continuous(labels = scales::percent) + 
+    theme_classic() + theme(plot.title = element_text(hjust = 0.5)) + 
+    ggtitle("breast cancer") + ylab("Distibution (%)")
+
+Ext_Fig2b = p_RE_amp_pan + p_RE_amp_brca + plot_layout(guides = "collect")
+Ext_Fig2b
+```
+
+# Ext Fig 2c
+FGFR2 RE distribution across different chromosomes  
+```{r, fig.width = 8, fig.height = 5}
+library(igraph)
+library(ggraph)
+library(stringr)
+library(BSgenome.Hsapiens.UCSC.hg19)
+hg19_length = seqlengths(Hsapiens)
+
+# data frame
+circ_fus_C_trunc = onco_data_new %>% 
+    filter(!is.na(RE_FGFR2), RE_location == "FGFR2 is upstream", grepl("I17|E18", FGFR2_brkpt), !is.na(RE_pos1), !is.na(RE_pos2)) %>%
+    mutate(gene1 = str_split_fixed(RE_partner, "-", 2)[,1],
+           gene2 = str_split_fixed(RE_partner, "-", 2)[,2])
+
+df_Ext_Fig2c = circ_fus_C_trunc %>% 
+    filter(!grepl("random", RE_chr2)) %>%
+    select(RE_chr2, RE_FGFR2) %>% 
+    mutate(RE_chr2 = factor(gsub("chr", "", RE_chr2), levels = c(1:22, "X")),
+           RE_FGFR2 = as.character(RE_FGFR2)) %>% 
+    group_by(RE_chr2, RE_FGFR2) %>% summarise(n = n()) %>%
+    mutate(RE_FGFR2 = replace(RE_FGFR2, RE_FGFR2 == "in-frame", "In-frame fusion"),
+           RE_FGFR2 = replace(RE_FGFR2, RE_FGFR2 == "in-strand (frame-unknown)", "Frame unknown"),
+           RE_FGFR2 = replace(RE_FGFR2, RE_FGFR2 == "intergenic RE", "Intergenic space"),
+           RE_FGFR2 = replace(RE_FGFR2, RE_FGFR2 == "out-of-strand RE", "Out-of-strand"),
+           RE_FGFR2 = replace(RE_FGFR2, RE_FGFR2 == "re_internal", "Internal"),
+           RE_FGFR2 = factor(RE_FGFR2, levels = c("In-frame fusion", "Frame unknown", "Intergenic space", "Out-of-strand", "Internal"))) %>%
+    dplyr::rename(Chromosome = RE_chr2)
+
+# plot
+p_RE_chr_count = ggplot(df_Ext_Fig2c , aes(x = Chromosome, y = n, fill = RE_FGFR2)) + geom_bar(stat = "identity") +
+  scale_fill_manual(values=c('#660000','#F90708', "#FF66FF", "#FFD700", "#989CFD")) +  
+   ylab("Count") + ylim(c(0, 800)) + 
+   theme_classic()
+
+p_RE_chr_dist = ggplot(df_Ext_Fig2c , aes(x = Chromosome, y = n, fill = RE_FGFR2)) + geom_bar(stat = "identity", position = "fill")+
+   scale_fill_manual(values=c('#660000','#F90708', "#FF66FF", "#FFD700", "#989CFD")) +
+   scale_y_continuous(labels = scales::percent) + ylab("Distribution (%)") +  
+   theme_classic()
+
+Ext_Fig2c = p_RE_chr_count / p_RE_chr_dist + plot_layout(guides = "collect")
+Ext_Fig2c
+```
+
+# Ext Fig 2d
+FGFR2 REs in chromosome 10  
+```{r, fig.width = 10, fig.height = 6}
+annot_range = function(X, connect_df){
+    annot_vertice = c()
+    for(i in 1:nrow(range_scale)){
+        tmp_scale = floor(X[i,1:2]/X[i,3])+1
+        tmp_vertice = data.frame(lab = c(tmp_scale[1]:tmp_scale[2]), bin = i)
+        tmp_start = ifelse(i == 1, 0, tail(annot_vertice$scaled, 1)) 
+        annot_vertice = rbind(annot_vertice,
+                              data.frame(scaled = (tmp_start+1):(tmp_start + nrow(tmp_vertice)), tmp_vertice))
+    }
+
+    df_from_to = matrix(NA, nrow(connect_df), 2)
+    for(i in 1:nrow(connect_df)){
+        t_val = round(connect_df$RE_pos2[i])
+        ind = which(apply(X, 1, function(x){x[2] >= t_val & x[1] <= t_val}))
+        tmp_to = annot_vertice %>% filter(bin == ind, lab == floor(round(connect_df$RE_pos2[i])/X[ind,3])) %>% pull(scaled)
+        tmp_from = annot_vertice %>% filter(bin == 2, lab == floor(round(connect_df$RE_pos1[i])/X[2,3])) %>% pull(scaled)
+        df_from_to[i,] = c(tmp_from, tmp_to)
+        #print(i)
+    }
+    connect_df = connect_df %>% mutate(from = df_from_to[,1], to = df_from_to[,2])
+    return(list(vertice = annot_vertice, annot_df = connect_df))
+}
+
+range_scale = rbind(c(1, 122669038, 300),
+              c(122669039, 123502624, 5),
+              c(123502625, hg19_length[10], 100))
+df_chr10 = annot_range(range_scale, circ_fus_C_trunc %>% filter(RE_chr2 == "chr10"))
+annot_trunc = data.frame(name = df_chr10$vertice$scaled, n = 1, grp = 1)  
+
+connect_partners = df_chr10$annot_df %>% filter(gene2 != "N/A", gene2 != "FGFR2")
+connect_internal = df_chr10$annot_df %>% filter(gene2 != "N/A", gene2 == "FGFR2")
+connect_intergenic = df_chr10$annot_df %>% filter(gene2 == "N/A")
+
+fgfr2_lab = df_chr10$annot_df %>% arrange(RE_pos1) %>% filter(gene1 == "FGFR2", gene2 == "FGFR2")
+t = connect_partners %>% group_by(gene2) %>% summarise(n = n())
+connect_partners_sum = unique(connect_partners %>% select(gene1, gene2)) %>%
+    mutate(from = fgfr2_lab$from[1], 
+           to = connect_partners$to[match(gene2, connect_partners$gene2)],
+           n = t$n[match(gene2, t$gene2)], RE = "with partner")
+connect_internal_sum = data.frame(gene1 = "FGFR2", gene2 = "FGFR2", 
+                                  from = fgfr2_lab$from[1], to = fgfr2_lab$to[nrow(fgfr2_lab)], 
+                                  n = nrow(connect_internal), RE = "internal")
+connect_intergenic_sum = connect_intergenic %>% select(gene1, gene2, from, to) %>%
+    mutate(n = 1, from = fgfr2_lab$from[1], RE = "intergenic")
+
+connect_sum = rbind(connect_partners_sum, connect_internal_sum, connect_intergenic_sum)
+
+# plot
+edge_color = rep("black", nrow(connect_sum))
+edge_color[connect_sum$RE== "intergenic"] = "#FF66FF"
+connect_sum$col = edge_color
+
+mygraph <- igraph::graph_from_data_frame(connect_sum[, c("from", "to", "col", "n")], vertices = annot_trunc, directed = FALSE )
+
+lab_arch = rep(NA, nrow(annot_trunc))
+lab_arch[annot_trunc$name==fgfr2_lab$from[1] | annot_trunc$name==fgfr2_lab$to[nrow(fgfr2_lab)]] = "FGFR2"
+lab_rec = connect_sum %>% filter(n>=5) %>% pull(gene2)
+lab_rec = setdiff(lab_rec, c("FGFR2")) 
+
+for(i in 1:length(lab_rec)){
+  t_loc = connect_sum %>% filter(gene2 == lab_rec[i]) %>% pull(to)
+  lab_arch[annot_trunc$name == min(t_loc)] = lab_rec[i]
+  lab_arch[annot_trunc$name == max(t_loc)] = lab_rec[i]
+}
+lab_arch[is.na(lab_arch)] = ""
+
+Ext_Fig2d = ggraph(mygraph, layout="linear") + 
+  geom_edge_arc(aes(edge_color = col, width = n), alpha=0.2) +
+  scale_edge_width(range = c(0.1, 4)) + 
+  scale_edge_color_identity() + 
+  geom_node_point(aes(size=n, color=as.factor(grp), fill=grp), alpha=0) +
+  geom_node_text(aes(label = lab_arch), angle = 90, hjust = 1, nudge_y = 0, size = 2) + 
+  theme_void() +
+  theme(
+    legend.position="none",
+    plot.margin=unit(c(0,0,0.3,0), "null"),
+    panel.spacing=unit(c(0,0,3.4,0), "null"),
+  ) +
+  expand_limits(x = c(-1.2, 1.2), y = c(-50000, 1.2))
+Ext_Fig2d
+
+df_Ext_Fig2d = circ_fus_C_trunc %>% filter(RE_chr2 == "chr10") %>% select(RE_pos1, gene1, RE_pos2, gene2, RE_FGFR2)
+```
+
+# Ext Fig 2e
+Proportion of self-interacting proteins between reference uniprot proteome and FGFR2 RE Partner   
+```{r, fig.width = 6, fig.height5}
+ensembl = biomaRt::useEnsembl(biomart = "ensembl", dataset = "hsapiens_gene_ensembl", version = "100")
+table_ensembl = biomaRt::getBM(attributes = c("ensembl_gene_id", "hgnc_symbol", "entrezgene_id", "uniprotswissprot", "ensembl_peptide_id"), mart = ensembl)
+
+circ_fus_C_trunc_with_partners = circ_fus_C_trunc %>%
+    filter(RE_FGFR2 != "intergenic RE") %>%
+    left_join(onco_data_new[, c(1:3)], by = "Index") %>%
+    mutate(gene2_EntrezID = table_ensembl$entrezgene_id[match(gene2, table_ensembl$hgnc_symbol)],
+           gene2_Ensembl = table_ensembl$ensembl_gene_id[match(gene2, table_ensembl$hgnc_symbol)])
+
+# there is inconsistent symbol between FMI and hgnc_symbol
+unmap_genes = c("C10orf118" = "CCDC186", "C10orf76" = "ARMH3", "C7orf73" = "STMP1", "CCDC147" = "CFAP58", "KIAA1009" = "CEP162", "KIAA1524" = "CIP2A", "KIAA1598" = "SHTN1",
+  "KIAA1967" = "CCAR2", "LINC00959" = "C10orf143", "MKL2" = "MRTFB", "MST4" = "STK26", "NARS" = "NARS1", "SEPT10" = "SEPTIN10", "WARS" = "WARS1", "WDR65" = "CFAP57",
+"FAM213A" = "PRXL2A", "FAM194B" = "ERICH6B", "METTL10" = "EEF1AKMT2", "TUBGCP2;ZNF511" = "TUBGCP2", "LOC387723" = "C10orf143", "AZI1" = "AZIN1", "C11orf30" = "EMSY",
+"LOC100132146" = "FAM240A")
+
+ind = match(circ_fus_C_trunc_with_partners$gene2, names(unmap_genes))
+ind_1 = ind[!is.na(ind)]
+ind_2 = which(!is.na(ind))
+circ_fus_C_trunc_with_partners$gene2[ind_2] = unmap_genes[ind_1]
+circ_fus_C_trunc_with_partners = circ_fus_C_trunc_with_partners %>% 
+  mutate(gene2_EntrezID = table_ensembl$entrezgene_id[match(gene2, table_ensembl$hgnc_symbol)],
+         gene2_Ensembl = table_ensembl$ensembl_gene_id[match(gene2, table_ensembl$hgnc_symbol)])
+
+circ_fus_C_trunc_with_partners[which(is.na(circ_fus_C_trunc_with_partners$gene2_EntrezID)),]
+circ_fus_C_trunc_with_partners = circ_fus_C_trunc_with_partners %>% 
+  mutate(gene2_EntrezID = replace(gene2_EntrezID, gene2 == "LINC00261", 140828), 
+         gene2_EntrezID = replace(gene2_EntrezID, gene2 == "FAM24B-CUZD1", 100533195))
+
+partner_genes = unique(circ_fus_C_trunc_with_partners$gene2_EntrezID)
+
+# SLIPPER self-interacting proteins
+SLIPPER_SIP = xlsx::read.xlsx2("~/Dropbox/Work_Netherlands/FGFR/FGFR2_C_trunc/Nature_figures/data/FM/Human SIP-direct_interaction-v20121201.xlsx", startRow = 2, sheetIndex = 1, header = T) %>%
+  mutate(Interactor_A_entrez = table_ensembl$entrezgene_id[match(Interactor_A..SwissProt.AC., table_ensembl$uniprotswissprot)],
+         Interactor_B_entrez = table_ensembl$entrezgene_id[match(Interactor_B..SwissProt.AC., table_ensembl$uniprotswissprot)])
+
+# Pfam/InterPro ID from UniProt database : https://www.biostars.org/p/275703/
+uniprot_prot = read.table("~/Dropbox/Work_Netherlands/FGFR/FGFR2_C_trunc/Nature_figures/data/FM/uniprot-filtered-organism__Homo+sapiens+(Human)+[9606]_+AND+review--.tab", header = T, sep = "\t", stringsAsFactors = F,
+                          fill = T, comment.char = "", quote = "")
+
+# PPPIDM database : http://ppidm.loria.fr/download/ (PPIDomainMiner : Inferring domain-domain interactions from multiple sources of protein-protein interactions, bioRxiv)
+PPIDM = read.csv2("~/Dropbox/Work_Netherlands/FGFR/FGFR2_C_trunc/Nature_figures/data/FM/PPIDM_FullSortedDataset_84K_GSB.csv", sep = ",", stringsAsFactors = F, header = T)
+
+# self-interacting domain used as gold-standard
+PPIDM_self = PPIDM %>% filter(D1 == D2, CLASS == "Gold", IN_GOLDSTANDARD == "yes") %>% distinct()
+
+# 3did interacting domain : https://3did.irbbarcelona.org/download.php
+threedid = read.table("~/Dropbox/Work_Netherlands/FGFR/FGFR2_C_trunc/Nature_figures/data/FM/3did_flat", header = F, sep = ",", stringsAsFactors = F, fill = T, comment.char = "", quote = "")
+threedid = data.frame(stringr::str_split_fixed(threedid[grepl("#=ID", threedid[,1]),1], "\t", 5)[, 2:5]) %>%
+  rename_all(~c("domain_1_name", "domain_2_name", "domain_1_pfam", "domain_2_pfam")) %>%
+  mutate(domain_1_pfam = stringr::str_split_fixed(gsub("\\@Pfam| \\(", "", domain_1_pfam), "[.]", 2)[,1],
+         domain_2_pfam = stringr::str_split_fixed(gsub("\\@Pfam|\\) ", "", domain_2_pfam), "[.]", 2)[,1])
+
+# self-interacting domain
+threedid_self = unique(threedid %>% filter(domain_1_pfam == domain_2_pfam)) %>%
+  distinct()
+
+# proteins with Self-interacting domains obtained from PPIDM and threeDID
+SID = data.frame(t(matrix(unlist(
+  lapply(uniprot_prot$Cross.reference..Pfam., function(X){
+  t_ppidm = sum(unlist(strsplit(X, ";")) %in% PPIDM_self$D1)>0
+  t_3did = sum(unlist(strsplit(X, ";")) %in% threedid_self$domain_1_pfam)>0
+  c(t_ppidm, t_3did)})), 
+  nrow = 2)))
+colnames(SID) = c("SID_PPIDM", "SID_3did")
+
+uniprot_prot = uniprot_prot %>% mutate(SID) %>%
+  mutate(SIP_SLIPPER = Entry %in% SLIPPER_SIP$Interactor_A..SwissProt.AC.,
+         EntrezID = table_ensembl$entrezgene_id[match(Entry, table_ensembl$uniprotswissprot)],
+         FGFR2_partner = EntrezID %in% partner_genes)#
+
+# partner vs background
+df = uniprot_prot %>%
+  mutate(type = ifelse(EntrezID %in% partner_genes, "partner", "non-partner")) 
+
+# Proportion of SI proteins among FGFR2 known partners and non-partners
+df2 = df %>% group_by(type, SIP_SLIPPER) %>% summarise(n = n()) %>% 
+  mutate(type = factor(type, levels = c("partner", "non-partner")))
+
+df2 = rbind(data.frame(df2), 
+            data.frame(type = "background", df2 %>% group_by(SIP_SLIPPER) %>% summarise(n = sum(n)))) %>%
+  filter(type != "non-partner")
+
+df_Ext_Fig2e = data.frame("type" = c("partner", "background"),
+                 "n" = (df2 %>% group_by(type) %>% summarise(n = sum(n)) %>% pull(n)),
+                 "x" = (df2 %>% filter(SIP_SLIPPER == TRUE) %>% pull(n)),
+                 "SIP_perc" = (df2 %>% filter(SIP_SLIPPER == TRUE) %>% pull(n))*100 / (df2 %>% group_by(type) %>% summarise(n = sum(n)) %>% pull(n)))
+
+Ext_Fig2e = ggplot(df_Ext_Fig2e, aes(x = type, y = SIP_perc)) + geom_bar(stat = "identity") + theme_classic() +
+  theme(axis.text.x = element_text(color = "black", size = 12),
+        axis.text.y = element_text(color = "black", size = 12))
+Ext_Fig2e
+
+prop.test(x = df_Ext_Fig2e$x, n = df_Ext_Fig2e$n, alternative = "greater") 
+```
+
+# Ext Fig 2f
+SLIPPER scores for FGFR2 partners
+```{r, fig.width = 7, fig.height = 5}
+background = read.table("~/Dropbox/Work_Netherlands/FGFR/FGFR2_C_trunc/Nature_figures/data/FM/SLIPPER_background.txt", header = T, stringsAsFactors = F, sep = "\t", comment.char = "", quote = "")
+# inframe, frame-unknown, out-of-strand
+partners = read.table("~/Dropbox/Work_Netherlands/FGFR/FGFR2_C_trunc/Nature_figures/data/FM/SLIPPER_Partners_all.txt", header = T, stringsAsFactors = F, sep = "\t", comment.char = "", quote = "")
+df_Ext_Fig2f = rbind(background %>% mutate(Group = "background"), partners %>% mutate(Group = "partner") %>% select(-Frequency))
+
+Ext_Fig2f = ggplot(df_Ext_Fig2f, aes(x = Score_rank, color = Group, fill = Group)) + geom_density(alpha = 0.1) + theme_classic() +
+    theme(axis.text.x = element_text(color = "black", size = 10), axis.text.y = element_text(color = "black", size = 10)) +
+    xlab("SLIPPER score") + ylab("Density")
+Ext_Fig2f
+```
+
+# Ext Fig 2g 
+Enriched potential self-interacting domains in FGFR2 partners by DAVID  
+DAVID results were saved because maintenance of DAVID database can change the results  
+```{r, fig.width = 10, fig.height = 7}
+FuncAnnotChart_background = read.table("~/Dropbox/Work_Netherlands/FGFR/FGFR2_C_trunc/Nature_figures/data/FM/DAVID_background.txt", 
+                                       header = T, sep = "\t", stringsAsFactors = F, quote = "", fill = T)
+FuncAnnotChart_background = FuncAnnotChart_background %>% 
+  mutate(Pfam_ID = stringr::str_split_fixed(Term, ":", 2)[,1],
+         Term = stringr::str_split_fixed(Term, ":", 2)[,2],
+         SI_domain = ifelse(Pfam_ID %in% intersect(PPIDM_self$D1, threedid_self$domain_1_pfam), T, F))
+
+# loading DAVID Pfam results for FGFR partners
+FuncAnnotChart_partners = read.table("~/Dropbox/Work_Netherlands/FGFR/FGFR2_C_trunc/Nature_figures/data/FM/DAVID_partners.txt", 
+                                       header = T, sep = "\t", stringsAsFactors = F, quote = "", fill = T)
+FuncAnnotChart_partners = data.frame(FuncAnnotChart_partners) %>% 
+  mutate(Pfam_ID = gsub("\"", "", stringr::str_split_fixed(Term, ":", 2)[,1]),
+         SI_domain = ifelse(Pfam_ID %in% intersect(PPIDM_self$D1, threedid_self$domain_1_pfam), T, F),
+         Term = stringr::str_split_fixed(Term, ":", 2)[,2])
+
+# presenting significant & SI domains
+FuncAnnotChart_sig = FuncAnnotChart_partners %>% arrange(PValue) %>% filter(PValue<0.05) %>% filter(SI_domain == T)
+ 
+df_Ext_Fig2g = rbind(data.frame(FuncAnnotChart_sig[, c("Term", "Pfam_ID", "Count", "PValue", "X.")], 
+                      Group = "Partner"),
+           data.frame(FuncAnnotChart_sig[, c("Term", "Pfam_ID")],
+                      FuncAnnotChart_background[match(FuncAnnotChart_sig$Pfam_ID, FuncAnnotChart_background$Pfam_ID), c("Count", "PValue", "X.")], 
+                      Group = "Background")) %>%
+  rename_all(~c("Term", "Pfam_ID", "Count", "PValue", "Perc", "Group")) %>%
+  mutate(Count = replace(Count, is.na(Count), 0), PValue = replace(PValue, is.na(PValue), 1), Perc = replace(Perc, is.na(Perc), 0)) %>%
+  mutate(Term = replace(Term, grepl("Calponin homology", Term), "CH domain"),
+         Term = replace(Term, grepl("SAM domain", Term), "SAM domain"),
+         Term = replace(Term, grepl("RNA recognition motif", Term), "RNA recognition motif"),
+         Term = replace(Term, grepl("TACC", Term), "TACC-containing protein"),
+         Term = replace(Term, grepl("S-adenosyl-L-", Term), "SAHase"),
+         Term = replace(Term, grepl("Calponin homology", Term), "CH domain"))
+
+df_Ext_Fig2g = df_Ext_Fig2g %>%
+    mutate(Term = factor(Term, levels = rev((df_Ext_Fig2g %>% filter(Group == "Partner") %>% arrange(Perc) %>% pull(Term)))),
+         Group = factor(Group, levels = c("Background", "Partner"))) 
+
+Ext_Fig2g = df_Ext_Fig2g %>% mutate(PValue = ifelse(PValue<0.05, formatC(PValue, format = "e", digits = 2), NA)) %>%
+    ggplot(aes(x = Term, y = Perc, fill = Group)) + 
+    geom_bar(stat = "identity", position=position_dodge()) + 
+    geom_text(aes(label = PValue), vjust = 0) + 
+    theme_classic() +
+    scale_fill_manual(values = c("black", "red")) + 
+    theme(legend.position = "bottom", axis.text.x = element_text(angle = 45, vjust= 1, hjust = 1)) + 
+    ylab("Self-interacting domain frequencies (%)")
+
+Ext_Fig2g
+```
+
+# Ext Fig 2h
+Frequencies of FGFR2 RE partners with self-interacting potentials
+```{r, fig.width = 7, fig.height = 7}
+donuts <- function(x, group = 1, labels = NA, col = NULL, radius = c(.7, 1)) {
+  group <- rep_len(group, length(x))
+  ug  <- unique(group)
+  tbl <- table(group)[order(ug)]
+
+  col <- if (is.null(col))
+    seq_along(ug) else rep_len(col, length(ug))
+  col.main <- Map(rep, col[seq_along(tbl)], tbl)
+  col.sub  <- lapply(col.main, function(x) {
+    al <- head(seq(0, 1, length.out = length(x) + 2L)[-1L], -1L)
+    Vectorize(adjustcolor)(x, alpha.f = al)
+  })
+
+  plot.new()
+
+  par(new = TRUE)
+  pie(x, border = NA, radius = radius[2L],
+      col = unlist(col.sub), labels = labels)
+
+  par(new = TRUE)
+  pie(x, border = NA, radius = radius[1L],
+      col = unlist(col.main), labels = NA)
+}
+
+df = circ_fus_C_trunc_with_partners %>%
+  mutate(SID = gene2_EntrezID %in% (uniprot_prot %>% filter(SID_PPIDM == T, SID_3did == T) %>% pull(EntrezID))) %>%
+  mutate(group = ifelse(gene2_EntrezID %in% (uniprot_prot %>% filter(Coiled.coil !="") %>% pull(EntrezID)), "Coiled-coil", NA),
+         group = replace(group, is.na(group) & SID == T, "SID"),
+         group = replace(group, is.na(group), "Non-SID"),
+         group = factor(group, levels = c("Coiled-coil", "SID", "Non-SID")))
+
+df_1 = df %>%
+    mutate(PARTNER_label = ifelse(gene2 %in% (head(names(sort(table(df$gene2), decreasing=T)), 20)), gene2, "others"),
+           PARTNER_label = factor(PARTNER_label, levels = c((head(names(sort(table(df$gene2), decreasing=T)), 20)), "others"))) %>%
+    group_by(group, PARTNER_label) %>% summarise(n = n())
+
+df_intergenic = circ_fus_C_trunc %>% filter(RE_FGFR2 == "intergenic RE") %>%
+    mutate(PARTNER_label = "intergenic", group = "intergenic") %>%
+    group_by(group, PARTNER_label) %>% summarise(n = n())
+
+df_comb = rbind(data.frame(df_1),
+                data.frame(df_intergenic)) %>%
+    mutate(group = factor(group, levels = c("Coiled-coil", "SID", "Non-SID", "intergenic")))
+
+#pdf("~/FGFR3/nvim_R/figures/donuts_partners.pdf", width = 10, height = 10)
+with(rev(df_comb), donuts(n, group, paste(PARTNER_label, " (", n, ")"), col = c("#F8766D", "#FFB266", "#C49A00", "#FF66FF", radius = c(0.3, 2))))
+
+
+
+
+df_SI = df %>% filter(SID == T)
+df_SI = df_SI %>% 
+    mutate(PARTNER_label = ifelse(gene2 %in% (head(names(sort(table(df_SI$gene2), decreasing=T)), 10)), gene2, "others"),
+    PARNER_label = factor(PARTNER_label, levels = c(head(names(sort(table(df_SI$gene2), decreasing=T)), 10), "others"))) %>%
+    group_by(PARTNER_label) %>% summarise(n = n())
+
+
+df = FGFR3_trunc_REs_with_partners %>%
+    mutate(SID = gene2_EntrezID %in% (uniprot_prot %>% filter((SID_name != "") | Coiled.coil !="") %>% pull(EntrezID))) %>%
+    mutate(group = ifelse(gene2_EntrezID %in% (uniprot_prot %>% filter(Coiled.coil !="") %>% pull(EntrezID)), "Coiled-coil", NA),
+           group = replace(group, is.na(group) & SID== T, "SID"),
+           group = replace(group, is.na(group), "Non-SID"),
+           group = factor(group, levels = c("Coiled-coil", "SID", "Non-SID")))
+
+
+
+
+df_NSI = df %>% filter(SID == F)
+df_NSI = df_NSI %>% 
+    mutate(PARTNER_label = ifelse(gene2 %in% (head(names(sort(table(df_NSI$gene2), decreasing=T)), 10)), gene2, "others"),
+    PARTNER_label = factor(PARTNER_label, levels = c(head(names(sort(table(df_NSI$gene2), decreasing=T)), 10), "others"))) %>%
+    group_by(PARTNER_label) %>% summarise(n = n())
+
+df_intergenic = circ_fus_C_trunc %>% filter(RE_FGFR2 == "intergenic RE") %>%
+    mutate(PARTNER_label = "intergenic") %>%
+    group_by(PARTNER_label) %>% summarise(n = n())
+
+df_Ext_Fig2h = rbind(data.frame(df_SI, group = "SID"),
+                data.frame(df_NSI, group = "non-SID"), 
+                data.frame(df_intergenic, group = "intergenic"))
+
+Ext_Fig2h = with(rev(df_Ext_Fig2h), donuts(n, group, paste(PARTNER_label, n), col = c("#F8766D", "#C49A00", "#FF66FF", radius = c(0.3, 2))))
+```
+
+# Ext Fig 2j
+Truncating mutation distribution across the different exons  
+```{r}
+Mut = read.table("~/FGFR/Daniel/R/Nature_figures/data/FM/Truncating Mutations with Exons and TMB.txt", header = T, sep = "\t", stringsAsFactors = F, quote = "")
+Mut = Mut[, c(1,2,5)]
+Mut$Length = as.numeric(as.character(Mut$Length))
+Mut$SV.Counts = as.numeric(as.character(Mut$SV.Counts))
+
+Mut$n_kb = (1000*Mut$SV.Counts)/(Mut$Length * nrow(onco_data_new))
+
+# binomial test
+prob_bino = Mut$Length/sum(Mut$Length)
+pval_bino = numeric(nrow(Mut))
+for(i in 1:length(prob_bino)){
+  t = binom.test(x = Mut$SV.Counts[i], n = sum(Mut$SV.Counts), p = prob_bino[i], alternative = "greater")
+  pval_bino[i] = t$p.value
+}
+
+df_Ext_Fig2j = data.frame(lab = Mut$Exon, n_kb = Mut$n_kb, pval = -log10(pval_bino))
+df_sv_bar_along = tidyr::gather(df_Ext_Fig2j, key="measure", value="value", c("n_kb", "pval"))
+df_sv_bar_along$lab = factor(df_sv_bar_along$lab, levels = df_Ext_Fig2j$lab)
+
+Ext_Fig2j = ggplot(df_sv_bar_along, aes(x=lab, y=value)) + geom_bar(stat='identity')+
+  facet_wrap(~measure,  ncol=1, scales = "free") + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) + theme_classic()
+Ext_Fig2j
+```
+
+# Ext Fig 2k
+Truncating mutations in exon 18
+```{r, fig.width = 10, fig.height = 3}
+samp_E18_trunc_mut = onco_data_new %>% filter(grepl("trunc", FGFR2_mut_trunc)) %>% pull(Specimen)
+df_Ext_Fig2k = FGFR2_mut_all %>% 
+    mutate(loc = as.numeric(substr(Protein_Change, 2, 4))) %>% 
+    filter(loc>=768, Sample_ID %in% samp_E18_trunc_mut, grepl("[*]", Protein_Change)) %>%
+    select(Sample_ID, loc, Protein_Change) %>% 
+    mutate(type = rep(NA, nrow(.)),
+           type = replace(type, grepl("fs", Protein_Change), "frameshift"),
+           type = replace(type, endsWith(Protein_Change, "*"), "nonsense"),
+           type = factor(type, levels = c("frameshift", "nonsense"))) %>% 
+    group_by(type, loc) %>% summarise(n = n())
+
+Ext_Fig2k = ggplot(df_Ext_Fig2k, aes(x = loc, y = n, fill = type)) + geom_bar(stat = "identity") + theme_minimal() + 
+    scale_fill_manual(values=c('#404040','gray')) + ylim(0,15) + xlim(c(767, 823)) +
+    theme_classic()
+Ext_Fig2k
+```
+
+# source data
+```{r}
+write.xlsx2(df_Ext_Fig2b, file = "~/FGFR/Daniel/R/Nature_figures/sources/FM_ExtFig2.xlsx", sheetName = "Ext_Fig2b", row.names = F)
+write.xlsx2(data.frame(df_Ext_Fig2c), file = "~/FGFR/Daniel/R/Nature_figures/sources/FM_ExtFig2.xlsx", sheetName = "Ext_Fig2c", append = T, row.names = F)
+write.xlsx2(data.frame(df_Ext_Fig2d), file = "~/FGFR/Daniel/R/Nature_figures/sources/FM_ExtFig2.xlsx", sheetName = "Ext_Fig2d", append = T, row.names = F)
+write.xlsx2(data.frame(df_Ext_Fig2e), file = "~/FGFR/Daniel/R/Nature_figures/sources/FM_ExtFig2.xlsx", sheetName = "Ext_Fig2e", append = T, row.names = F)
+write.xlsx2(data.frame(df_Ext_Fig2f), file = "~/FGFR/Daniel/R/Nature_figures/sources/FM_ExtFig2.xlsx", sheetName = "Ext_Fig2f", append = T, row.names = F)
+write.xlsx2(data.frame(df_Ext_Fig2g), file = "~/FGFR/Daniel/R/Nature_figures/sources/FM_ExtFig2.xlsx", sheetName = "Ext_Fig2g", append = T, row.names = F)
+write.xlsx2(data.frame(df_Ext_Fig2h), file = "~/FGFR/Daniel/R/Nature_figures/sources/FM_ExtFig2.xlsx", sheetName = "Ext_Fig2h", append = T, row.names = F)
+write.xlsx2(data.frame(df_Ext_Fig2j), file = "~/FGFR/Daniel/R/Nature_figures/sources/FM_ExtFig2.xlsx", sheetName = "Ext_Fig2j", append = T, row.names = F)
+write.xlsx2(data.frame(df_Ext_Fig2k), file = "~/FGFR/Daniel/R/Nature_figures/sources/FM_ExtFig2.xlsx", sheetName = "Ext_Fig2k", append = T, row.names = F)
+```
+
+
+
+
